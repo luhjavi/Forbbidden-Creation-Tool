@@ -1,3 +1,5 @@
+--!strict
+
 local Selection = game:GetService("Selection")
 local InsertService = game:GetService("InsertService")
 local ChangeHistoryService = game:GetService("ChangeHistoryService")
@@ -8,11 +10,39 @@ local RunService = game:GetService("RunService")
 
 local toolbar = plugin:CreateToolbar("Forbidden Creation Tool")
 
-local OPEN_ICON = "rbxassetid://121875636925290"
-local CLOSE_ICON = "rbxassetid://137150013017997"
+local ICON = {
+	open = "rbxassetid://100356697169991",
+	close = "rbxassetid://137150013017997",
+	thumbnailEditor = "rbxassetid://128709905105260",
+	thumbnailEditorBack = "rbxassetid://100356697169991",
+}
 
-local PLUGIN_VERSION = 1
-local PLUGIN_ASSET_ID = 0
+local PLUGIN_VERSION = "0.0.1"
+local PLUGIN_ASSET_ID = 95577519295816
+
+local function parseVersion(text: string): { number }?
+	local major, minor, patch = text:match("^(%d+)%.(%d+)%.(%d+)$")
+	if not major or not minor or not patch then
+		return nil
+	end
+	return { tonumber(major) :: number, tonumber(minor) :: number, tonumber(patch) :: number }
+end
+
+local function isVersionOutdated(current: string, latest: string): boolean
+	local c = parseVersion(current)
+	local l = parseVersion(latest)
+	if not c or not l then
+		return false
+	end
+	for i = 1, 3 do
+		if l[i] > c[i] then
+			return true
+		elseif l[i] < c[i] then
+			return false
+		end
+	end
+	return false
+end
 
 local connections: { RBXScriptConnection } = {}
 local function track(connection: RBXScriptConnection): RBXScriptConnection
@@ -20,47 +50,72 @@ local function track(connection: RBXScriptConnection): RBXScriptConnection
 	return connection
 end
 
+local workspaceBoxPart: BasePart? = nil
+
+local function removeWorkspaceBox()
+	if workspaceBoxPart then
+		workspaceBoxPart:Destroy()
+		workspaceBoxPart = nil
+	end
+end
+
 plugin.Unloading:Connect(function()
+	removeWorkspaceBox()
 	for _, connection in ipairs(connections) do
 		connection:Disconnect()
 	end
 	table.clear(connections)
 end)
 
-local ACCESSORY_TYPES = {
-	{ label = "Hat", attachment = "HatAttachment", enumName = "Hat" },
-	{ label = "Hair", attachment = "HairAttachment", enumName = "Hair" },
-	{ label = "Face", attachment = "FaceFrontAttachment", enumName = "Face" },
-	{ label = "Eyebrow", attachment = "FaceFrontAttachment", enumName = "Eyebrow" },
-	{ label = "Eyelash", attachment = "FaceFrontAttachment", enumName = "Eyelash" },
-	{ label = "Neck", attachment = "NeckAttachment", enumName = "Neck" },
-	{ label = "Front", attachment = "BodyFrontAttachment", enumName = "Front" },
-	{ label = "Back", attachment = "BodyBackAttachment", enumName = "Back" },
-	{ label = "Waist", attachment = "WaistCenterAttachment", enumName = "Waist" },
-	{ label = "L Shoulder", attachment = "LeftShoulderAttachment", enumName = "Shoulder" },
-	{ label = "R Shoulder", attachment = "RightShoulderAttachment", enumName = "Shoulder" },
-	{ label = "L Collar", attachment = "LeftCollarAttachment", enumName = "Shoulder" },
-	{ label = "R Collar", attachment = "RightCollarAttachment", enumName = "Shoulder" },
+type AccessoryTypeOption = { label: string, attachment: string, enumName: string, specKey: string }
+type ScaleTypeOption = { label: string, value: string }
+type BoxSet = { Classic: Vector3, ProportionsNormal: Vector3, ProportionsSlender: Vector3 }
+
+local ACCESSORY_TYPES: { AccessoryTypeOption } = {
+	{ label = "Hat", attachment = "HatAttachment", enumName = "Hat", specKey = "Hat" },
+	{ label = "Hair", attachment = "HairAttachment", enumName = "Hair", specKey = "Hair" },
+	{ label = "Face", attachment = "FaceFrontAttachment", enumName = "Face", specKey = "Face" },
+	{ label = "Eyebrow", attachment = "FaceFrontAttachment", enumName = "Eyebrow", specKey = "Brow" },
+	{ label = "Eyelash", attachment = "FaceFrontAttachment", enumName = "Eyelash", specKey = "Brow" },
+	{ label = "Neck", attachment = "NeckAttachment", enumName = "Neck", specKey = "Neck" },
+	{ label = "Front", attachment = "BodyFrontAttachment", enumName = "Front", specKey = "Front" },
+	{ label = "Back", attachment = "BodyBackAttachment", enumName = "Back", specKey = "Back" },
+	{ label = "Waist", attachment = "WaistCenterAttachment", enumName = "Waist", specKey = "Waist" },
+	{ label = "L Shoulder", attachment = "LeftShoulderAttachment", enumName = "Shoulder", specKey = "ShoulderArm" },
+	{ label = "R Shoulder", attachment = "RightShoulderAttachment", enumName = "Shoulder", specKey = "ShoulderArm" },
+	{ label = "L Collar", attachment = "LeftCollarAttachment", enumName = "Shoulder", specKey = "ShoulderCollar" },
+	{ label = "R Collar", attachment = "RightCollarAttachment", enumName = "Shoulder", specKey = "ShoulderCollar" },
 }
 
-local SCALE_TYPES = {
+local SCALE_TYPES: { ScaleTypeOption } = {
 	{ label = "Classic", value = "Classic" },
 	{ label = "Normal", value = "ProportionsNormal" },
 	{ label = "Slender", value = "ProportionsSlender" },
 }
 
+local BOUNDING_BOXES: { [string]: BoxSet } = {
+	Hat = { Classic = Vector3.new(3, 4, 3), ProportionsNormal = Vector3.new(1.87, 2.5, 1.87), ProportionsSlender = Vector3.new(1.78, 2.5, 1.78) },
+	Hair = { Classic = Vector3.new(3, 5, 3.5), ProportionsNormal = Vector3.new(1.87, 3.12, 2.18), ProportionsSlender = Vector3.new(1.78, 3.12, 2.08) },
+	Face = { Classic = Vector3.new(3, 2, 2), ProportionsNormal = Vector3.new(1.87, 1.25, 1.25), ProportionsSlender = Vector3.new(1.78, 1.25, 1.18) },
+	Brow = { Classic = Vector3.new(1.5, 0.5, 0.5), ProportionsNormal = Vector3.new(1.5, 0.5, 0.5), ProportionsSlender = Vector3.new(1.5, 0.5, 0.5) },
+	Neck = { Classic = Vector3.new(3, 3, 2), ProportionsNormal = Vector3.new(2.95, 3.68, 2.16), ProportionsSlender = Vector3.new(2.59, 3.39, 1.92) },
+	Front = { Classic = Vector3.new(3, 3, 3), ProportionsNormal = Vector3.new(2.95, 3.68, 3.24), ProportionsSlender = Vector3.new(2.59, 3.39, 2.88) },
+	Back = { Classic = Vector3.new(10, 7, 4.5), ProportionsNormal = Vector3.new(9.86, 8.59, 4.87), ProportionsSlender = Vector3.new(8.64, 7.91, 4.32) },
+	Waist = { Classic = Vector3.new(4, 3.5, 7), ProportionsNormal = Vector3.new(3.94, 4.29, 7.57), ProportionsSlender = Vector3.new(3.76, 3.29, 6.73) },
+	ShoulderArm = { Classic = Vector3.new(3, 3, 3), ProportionsNormal = Vector3.new(2.67, 4.40, 3.09), ProportionsSlender = Vector3.new(2.37, 3.96, 2.75) },
+	ShoulderCollar = { Classic = Vector3.new(3, 3, 3), ProportionsNormal = Vector3.new(2.95, 3.68, 3.24), ProportionsSlender = Vector3.new(2.59, 3.39, 2.88) },
+}
+
 local pluginButton = toolbar:CreateButton(
 	"AssetCreation",
 	"Open or close the Forbidden Creation Tool menu",
-	OPEN_ICON,
+	ICON.open,
 	"Forbidden Creation Tool"
 )
 pluginButton.ClickableWhenViewportHidden = true
 
-local widget: DockWidgetPluginGui
-
 local function updatePluginButtonState(isMenuOpen: boolean)
-	pluginButton.Icon = if isMenuOpen then CLOSE_ICON else OPEN_ICON
+	pluginButton.Icon = if isMenuOpen then ICON.close else ICON.open
 	pluginButton:SetActive(isMenuOpen)
 end
 
@@ -74,7 +129,7 @@ local widgetInfo = DockWidgetPluginGuiInfo.new(
 	360
 )
 
-widget = plugin:CreateDockWidgetPluginGuiAsync("AccessoryCreator", widgetInfo)
+local widget = plugin:CreateDockWidgetPluginGuiAsync("AccessoryCreator", widgetInfo)
 widget.Title = "Forbidden Creation Tool"
 
 local TOPBAR_HEIGHT = 46
@@ -99,14 +154,14 @@ local topbarIcon = Instance.new("ImageLabel")
 topbarIcon.Size = UDim2.fromOffset(26, 26)
 topbarIcon.Position = UDim2.new(0, 10, 0.5, -13)
 topbarIcon.BackgroundTransparency = 1
-topbarIcon.Image = OPEN_ICON
+topbarIcon.Image = ICON.open
 topbarIcon.ZIndex = 2
 topbarIcon.Parent = topbar
 
 local topbarTitle = Instance.new("TextLabel")
 topbarTitle.BackgroundTransparency = 1
 topbarTitle.Position = UDim2.new(0, 46, 0, 6)
-topbarTitle.Size = UDim2.new(1, -56, 0, 18)
+topbarTitle.Size = UDim2.new(1, -92, 0, 18)
 topbarTitle.Font = Enum.Font.GothamBold
 topbarTitle.TextSize = 15
 topbarTitle.TextXAlignment = Enum.TextXAlignment.Left
@@ -118,15 +173,31 @@ topbarTitle.Parent = topbar
 local topbarStatus = Instance.new("TextLabel")
 topbarStatus.BackgroundTransparency = 1
 topbarStatus.Position = UDim2.new(0, 46, 0, 24)
-topbarStatus.Size = UDim2.new(1, -56, 0, 16)
+topbarStatus.Size = UDim2.new(1, -92, 0, 16)
 topbarStatus.Font = Enum.Font.Gotham
-topbarStatus.TextSize = 11
+topbarStatus.TextSize = 12
 topbarStatus.TextXAlignment = Enum.TextXAlignment.Left
 topbarStatus.TextTruncate = Enum.TextTruncate.AtEnd
 topbarStatus.TextColor3 = Color3.fromRGB(150, 150, 150)
 topbarStatus.Text = "Step 1 of 3"
 topbarStatus.ZIndex = 2
 topbarStatus.Parent = topbar
+
+local thumbnailEditorButton = Instance.new("ImageButton")
+thumbnailEditorButton.Name = "ThumbnailEditorButton"
+thumbnailEditorButton.AnchorPoint = Vector2.new(1, 0.5)
+thumbnailEditorButton.Position = UDim2.new(1, -10, 0.5, 0)
+thumbnailEditorButton.Size = UDim2.fromOffset(30, 30)
+thumbnailEditorButton.BackgroundColor3 = Color3.fromRGB(108, 111, 128)
+thumbnailEditorButton.AutoButtonColor = true
+thumbnailEditorButton.Image = ICON.thumbnailEditor
+thumbnailEditorButton.BackgroundTransparency = 0.9
+thumbnailEditorButton.ScaleType = Enum.ScaleType.Fit
+thumbnailEditorButton.ZIndex = 3
+thumbnailEditorButton.Parent = topbar
+local thumbnailEditorButtonCorner = Instance.new("UICorner")
+thumbnailEditorButtonCorner.CornerRadius = UDim.new(0.5, 0)
+thumbnailEditorButtonCorner.Parent = thumbnailEditorButton
 
 local DEFAULT_STATUS_COLOR = Color3.fromRGB(150, 150, 150)
 local statusToken = 0
@@ -179,43 +250,38 @@ versionLabel.Text = "Version " .. PLUGIN_VERSION
 versionLabel.ZIndex = 2
 versionLabel.Parent = footer
 
-local latestVersion: number? = nil
-local updateButton: PluginToolbarButton? = nil
-local versionChecked = false
+local version = {
+	latest = nil :: string?,
+	outdated = false,
+	checked = false,
+}
+
+local refreshStatus: () -> () = function() end
+
+local UPDATE_STATUS_COLOR = Color3.fromRGB(212, 146, 47)
+
+local function updateStatusText(): string
+	return "🔔 UPDATE AVAILABLE (v" .. tostring(version.latest) .. ")! Open [Plugins] -> [Manage Plugins] to update."
+end
 
 local function applyVersionUI()
-	local outdated = latestVersion ~= nil and latestVersion > PLUGIN_VERSION
-	if outdated then
+	version.outdated = version.latest ~= nil and isVersionOutdated(PLUGIN_VERSION, version.latest)
+	if version.outdated then
 		versionLabel.Text = string.format(
-			'Version %d  <font color="rgb(255,80,80)">OUTDATED</font>',
+			'Version %s  <font color="rgb(255,80,80)">OUTDATED</font>',
 			PLUGIN_VERSION
 		)
-		if not updateButton then
-			updateButton = toolbar:CreateButton(
-				"AssetCreationUpdate",
-				"Update to version " .. tostring(latestVersion),
-				OPEN_ICON,
-				"Update Plugin"
-			)
-			updateButton.ClickableWhenViewportHidden = true
-			track(updateButton.Click:Connect(function()
-				widget.Enabled = true
-				setStatus(
-					"Update available (v" .. tostring(latestVersion) .. "). Open Plugins \u{25B8} Manage Plugins to update.",
-					Color3.fromRGB(255, 120, 120)
-				)
-			end))
-		end
 	else
 		versionLabel.Text = "Version " .. PLUGIN_VERSION
 	end
+	refreshStatus()
 end
 
 local function checkVersionOnce()
-	if versionChecked then
+	if version.checked then
 		return
 	end
-	versionChecked = true
+	version.checked = true
 
 	if PLUGIN_ASSET_ID <= 0 then
 		applyVersionUI()
@@ -226,23 +292,37 @@ local function checkVersionOnce()
 		local ok, info = pcall(function()
 			return MarketplaceService:GetProductInfoAsync(PLUGIN_ASSET_ID, Enum.InfoType.Asset)
 		end)
-		if ok and typeof(info) == "table" and info.Description then
-			local found = tostring(info.Description):match("Version:%s*(%d+)")
-			if found then
-				latestVersion = tonumber(found)
+		if not ok then
+			applyVersionUI()
+			return
+		end
+		if typeof(info) == "table" then
+			local productInfo = info :: { Description: string? }
+			local description = productInfo.Description
+			if description then
+				local found = description:match("Version:%s*(%d+%.%d+%.%d+)")
+				if found then
+					version.latest = found
+				end
 			end
 		end
 		applyVersionUI()
 	end)
 end
 
-local selectedMesh: BasePart? = nil
-local selectedSpecialMesh: SpecialMesh? = nil
-local selectedRig: Model? = nil
-local rigType: string? = nil
-local selectedType: { label: string, attachment: string, enumName: string }? = nil
-local selectedScaleType = "ProportionsNormal"
-local currentStep = 1
+local EDITOR_STEP = 4
+
+local state = {
+	mesh = nil :: BasePart?,
+	specialMesh = nil :: SpecialMesh?,
+	rig = nil :: Model?,
+	rigType = nil :: string?,
+	accessoryType = nil :: AccessoryTypeOption?,
+	scaleType = "ProportionsNormal",
+	accessory = nil :: Accessory?,
+	step = 1,
+}
+
 local showStep: (step: number) -> ()
 
 local suppressSelectionReset = false
@@ -264,12 +344,28 @@ local function isInSelection(obj: Instance): boolean
 end
 
 local function stepStatusText(): string
-	if currentStep == 1 then
-		return "Step 1 of 3 — MeshPart"
-	elseif currentStep == 2 then
+	if version.outdated then
+		return updateStatusText()
+	end
+	if state.step == 1 then
+		return "Step 1 of 3 — MeshPart Selection"
+	elseif state.step == 2 then
 		return "Step 2 of 3 — Rig Selection"
+	elseif state.step == EDITOR_STEP then
+		return "Editing Accessory Thumbnail Configuration"
 	end
 	return "Step 3 of 3 — Review and Create"
+end
+
+local function stepStatusColor(): Color3
+	if version.outdated then
+		return UPDATE_STATUS_COLOR
+	end
+	return DEFAULT_STATUS_COLOR
+end
+
+refreshStatus = function()
+	setStatus(stepStatusText(), stepStatusColor())
 end
 
 local function showTransientStatus(message: string, color: Color3?)
@@ -289,7 +385,7 @@ local function showTransientStatus(message: string, color: Color3?)
 		end
 		statusTween = nil
 		topbarStatus.Text = stepStatusText()
-		topbarStatus.TextColor3 = DEFAULT_STATUS_COLOR
+		topbarStatus.TextColor3 = stepStatusColor()
 		local fadeIn = TweenService:Create(topbarStatus, TweenInfo.new(0.4), { TextTransparency = 0 })
 		statusTween = fadeIn
 		fadeIn:Play()
@@ -299,7 +395,7 @@ end
 local COLOR_PRIMARY = Color3.fromRGB(0, 120, 215)
 local COLOR_PRIMARY_OFF = Color3.fromRGB(70, 70, 70)
 
-local function makePage(): Frame
+local function makePage(): (ScrollingFrame, Frame)
 	local page = Instance.new("Frame")
 	page.Size = UDim2.new(1, 0, 1, -(TOPBAR_HEIGHT + FOOTER_HEIGHT))
 	page.Position = UDim2.new(0, 0, 0, TOPBAR_HEIGHT)
@@ -333,7 +429,7 @@ local function makePage(): Frame
 	layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
 	layout.Parent = scroller
 
-	return scroller
+	return scroller, page
 end
 
 local function createLabel(parent: Instance, text: string, order: number, bold: boolean?): TextLabel
@@ -411,7 +507,7 @@ local function setButtonEnabled(button: TextButton, enabled: boolean, primary: b
 	end
 end
 
-local page1 = makePage()
+local page1, page1Frame = makePage()
 createHeading(page1, "Choose Mesh")
 createLabel(
 	page1,
@@ -426,7 +522,7 @@ meshStatusLabel.Font = Enum.Font.GothamMedium
 meshStatusLabel.TextXAlignment = Enum.TextXAlignment.Center
 local nextButton1 = createButton(page1, "Next", 5, true)
 
-local function getMeshSelection(): (BasePart?, SpecialMesh?, boolean, string)
+local function getMeshSelection(): (BasePart?, SpecialMesh?, boolean, string, string?)
 	local selected = Selection:Get()
 	if #selected == 0 then
 		return nil, nil, false, "Selection Part: None"
@@ -436,39 +532,58 @@ local function getMeshSelection(): (BasePart?, SpecialMesh?, boolean, string)
 	end
 
 	local obj = selected[1]
+	if not obj then
+		return nil, nil, false, "Selection Part: None"
+	end
 	if not obj:IsA("BasePart") then
 		return nil, nil, false, "Selection Part: Not a part"
+	end
+	if not obj:IsDescendantOf(workspace) then
+		return nil, nil, false, "Selection Part: '" .. obj.Name .. "' must be in the Workspace."
+	end
+	if obj:FindFirstAncestorWhichIsA("Accessory") then
+		return nil, nil, false, "Selection Part: '" .. obj.Name .. "' is already inside an Accessory."
 	end
 	if obj:FindFirstAncestorOfClass("Model") then
 		return nil, nil, false, "Selection Part: '" .. obj.Name .. "' cannot be inside a model."
 	end
 
+	local warning: string? = nil
+	if obj.Transparency >= 1 then
+		warning = "Warning: this part is invisible (Transparency is 1)."
+	end
+
 	if obj:IsA("MeshPart") then
-		return obj, nil, true, "Selected Part: " .. obj.Name .. "  (MeshPart)"
+		return obj, nil, true, "Selected Part: " .. obj.Name .. "  (MeshPart)", warning
 	end
 
 	local specialMesh = obj:FindFirstChildWhichIsA("SpecialMesh")
 	if specialMesh and specialMesh.MeshType == Enum.MeshType.FileMesh and specialMesh.MeshId ~= "" then
-		return obj, specialMesh, true, "Selected Part: " .. obj.Name .. "  (Part + SpecialMesh)"
+		return obj, specialMesh, true, "Selected Part: " .. obj.Name .. "  (Part + SpecialMesh)", warning
 	end
 
 	return nil, nil, false, "Selection Part: '" .. obj.Name .. "' is a part with no SpecialMesh."
 end
 
 local function refreshMeshStep()
-	local part, special, valid, message = getMeshSelection()
-	meshStatusLabel.Text = message
-	meshStatusLabel.TextColor3 = if valid
-		then Color3.fromRGB(150, 230, 150)
-		else Color3.fromRGB(170, 220, 255)
-	if valid then
-		selectedMesh = part
-		selectedSpecialMesh = special
+	local part, special, valid, message, warning = getMeshSelection()
+	if valid and warning then
+		meshStatusLabel.Text = message .. " — " .. warning
+		meshStatusLabel.TextColor3 = Color3.fromRGB(235, 200, 120)
+	else
+		meshStatusLabel.Text = message
+		meshStatusLabel.TextColor3 = if valid
+			then Color3.fromRGB(150, 230, 150)
+			else Color3.fromRGB(170, 220, 255)
+	end
+	if valid and part then
+		state.mesh = part
+		state.specialMesh = special
 	end
 	setButtonEnabled(nextButton1, valid, true)
 end
 
-local page2 = makePage()
+local page2, page2Frame = makePage()
 createHeading(page2, "Choose your Rig")
 createLabel(
 	page2,
@@ -494,6 +609,9 @@ local function getRigSelection(): (Model?, string?, boolean, string)
 	end
 
 	local obj = selected[1]
+	if not obj then
+		return nil, nil, false, "Rig: None"
+	end
 	local model = if obj:IsA("Model") then obj else obj:FindFirstAncestorOfClass("Model")
 	if not model then
 		return nil, nil, false, "Rig: Selection is not a Model."
@@ -514,14 +632,14 @@ local function refreshRigStep()
 	rigStatusLabel.TextColor3 = if valid
 		then Color3.fromRGB(150, 230, 150)
 		else Color3.fromRGB(170, 220, 255)
-	if valid then
-		selectedRig = model
-		rigType = detected
+	if valid and model then
+		state.rig = model
+		state.rigType = detected
 	end
 	setButtonEnabled(nextButton2, valid, true)
 end
 
-local page3 = makePage()
+local page3, page3Frame = makePage()
 createHeading(page3, "Accessory Review")
 
 local VP_SIZE = 150
@@ -577,6 +695,31 @@ local viewCamera: Camera? = nil
 local currentViewCFrame: CFrame = CFrame.lookAt(Vector3.new(6, 4, 6), Vector3.zero)
 local orbiting = false
 
+local ZOOM_MIN, ZOOM_MAX = 0.05, 1
+local FOV_MIN, FOV_MAX = 20, 100
+local zoomValue = 0.5
+local fovValue = 70
+local syncZoomSlider: () -> () = function() end
+
+local function zoomToDistance(z: number): number
+	local frac = math.clamp((z - ZOOM_MIN) / (ZOOM_MAX - ZOOM_MIN), 0, 1)
+	local near = viewTargetSize * 0.6
+	local far = viewTargetSize * 12
+	return far - frac * (far - near)
+end
+
+local function distanceToZoom(d: number): number
+	local near = viewTargetSize * 0.6
+	local far = viewTargetSize * 12
+	local frac = math.clamp((far - d) / math.max(far - near, 1e-3), 0, 1)
+	return math.clamp(ZOOM_MIN + frac * (ZOOM_MAX - ZOOM_MIN), ZOOM_MIN, ZOOM_MAX)
+end
+
+local showBoundingBox = false
+local measuredHandleSize: Vector3? = nil
+local previewToken = 0
+local refreshReviewState: () -> () = function() end
+
 local viewportHint = Instance.new("TextLabel")
 viewportHint.Name = "Hint"
 viewportHint.AnchorPoint = Vector2.new(0.5, 1)
@@ -586,7 +729,7 @@ viewportHint.BackgroundTransparency = 1
 viewportHint.Font = Enum.Font.GothamMedium
 viewportHint.TextSize = 12
 viewportHint.TextColor3 = Color3.fromRGB(225, 225, 225)
-viewportHint.TextStrokeTransparency = 0.5
+viewportHint.TextStrokeTransparency = 0.25
 viewportHint.Text = "Hold Right-Mouse and Drag"
 viewportHint.ZIndex = 3
 viewportHint.Parent = viewport
@@ -645,6 +788,7 @@ local cameraAnimating = false
 local function zoom(factor: number)
 	targetDistance = math.clamp(targetDistance * factor, viewTargetSize * 0.6, viewTargetSize * 12)
 	cameraAnimating = true
+	syncZoomSlider()
 end
 
 local SMOOTH_SPEED = 14
@@ -696,6 +840,232 @@ track(zoomInButton.MouseButton1Click:Connect(function()
 end))
 track(zoomOutButton.MouseButton1Click:Connect(function()
 	zoom(1.15)
+end))
+
+type Slider = { container: Frame, set: (number, boolean?) -> () }
+
+local function createSlider(title: string, minV: number, maxV: number, decimals: number, step: number, onChange: (number) -> ()): Slider
+	local container = Instance.new("Frame")
+	container.Name = title .. "Slider"
+	container.BackgroundTransparency = 1
+	container.Size = UDim2.new(0.5, -6, 1, 0)
+	local vLayout = Instance.new("UIListLayout")
+	vLayout.SortOrder = Enum.SortOrder.LayoutOrder
+	vLayout.Padding = UDim.new(0, 4)
+	vLayout.Parent = container
+
+	local label = Instance.new("TextLabel")
+	label.LayoutOrder = 1
+	label.Size = UDim2.new(1, 0, 0, 16)
+	label.BackgroundTransparency = 1
+	label.Font = Enum.Font.GothamMedium
+	label.TextSize = 13
+	label.TextXAlignment = Enum.TextXAlignment.Left
+	label.TextColor3 = Color3.fromRGB(220, 220, 220)
+	label.Parent = container
+
+	local track_ = Instance.new("TextButton")
+	track_.LayoutOrder = 2
+	track_.AutoButtonColor = false
+	track_.Text = ""
+	track_.Size = UDim2.new(1, 0, 0, 16)
+	track_.BackgroundColor3 = Color3.fromRGB(40, 40, 46)
+	track_.BorderSizePixel = 0
+	track_.Parent = container
+	local trackCorner = Instance.new("UICorner")
+	trackCorner.CornerRadius = UDim.new(1, 0)
+	trackCorner.Parent = track_
+
+	local fill = Instance.new("Frame")
+	fill.BackgroundColor3 = Color3.fromRGB(108, 111, 128)
+	fill.BackgroundTransparency = 0
+	fill.BorderSizePixel = 0
+	fill.Size = UDim2.new(0, 30, 1, 0)
+	fill.Parent = track_
+	local fillCorner = Instance.new("UICorner")
+	fillCorner.CornerRadius = UDim.new(1, 0)
+	fillCorner.Parent = fill
+
+	local knob = Instance.new("Frame")
+	knob.AnchorPoint = Vector2.new(0.5, 0.5)
+	knob.Size = UDim2.fromOffset(14, 14)
+	knob.Position = UDim2.new(0, 0, 0.5, 0)
+	knob.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+	knob.BackgroundTransparency = 0
+	knob.BorderSizePixel = 0
+	knob.ZIndex = 2
+	knob.Parent = track_
+	local knobCorner = Instance.new("UICorner")
+	knobCorner.CornerRadius = UDim.new(1, 0)
+	knobCorner.Parent = knob
+
+	local dragCapture = Instance.new("TextButton")
+	dragCapture.Name = title .. "DragCapture"
+	dragCapture.Text = ""
+	dragCapture.AutoButtonColor = false
+	dragCapture.BackgroundTransparency = 1
+	dragCapture.Size = UDim2.fromScale(1, 1)
+	dragCapture.Position = UDim2.fromScale(0, 0)
+	dragCapture.ZIndex = 50
+	dragCapture.Visible = false
+	dragCapture.Parent = widget
+
+	local current = minV
+	local dragging = false
+
+	local function snap(value: number): number
+		local snapped = math.floor((value - minV) / step + 0.5) * step + minV
+		return math.clamp(snapped, minV, maxV)
+	end
+
+	local function render()
+		local frac = math.clamp((current - minV) / (maxV - minV), 0, 1)
+		fill.Size = UDim2.new(frac, 0, 1, 0)
+		knob.Position = UDim2.new(frac, 0, 0.5, 0)
+		label.Text = string.format("%s: %." .. decimals .. "f", title, current)
+	end
+
+	local function setValue(value: number, fire: boolean?)
+		current = snap(value)
+		render()
+		if fire ~= false then
+			onChange(current)
+		end
+	end
+
+	local function updateFromX(screenX: number)
+		local frac = math.clamp((screenX - track_.AbsolutePosition.X) / math.max(track_.AbsoluteSize.X, 1), 0, 1)
+		setValue(minV + frac * (maxV - minV), true)
+	end
+
+	local function stopDrag()
+		dragging = false
+		dragCapture.Visible = false
+	end
+
+	track(track_.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 then
+			dragging = true
+			dragCapture.Visible = true
+			updateFromX(input.Position.X)
+		end
+	end))
+	track(dragCapture.InputChanged:Connect(function(input)
+		if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
+			updateFromX(input.Position.X)
+		end
+	end))
+	track(track_.InputChanged:Connect(function(input)
+		if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
+			updateFromX(input.Position.X)
+		end
+	end))
+	track(dragCapture.InputEnded:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 then
+			stopDrag()
+		end
+	end))
+	track(track_.InputEnded:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 then
+			stopDrag()
+		end
+	end))
+	track(UserInputService.InputEnded:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 then
+			stopDrag()
+		end
+	end))
+
+	render()
+	return { container = container, set = setValue }
+end
+
+local cameraSliderRow = Instance.new("Frame")
+cameraSliderRow.Name = "CameraSliders"
+cameraSliderRow.LayoutOrder = 2
+cameraSliderRow.BackgroundTransparency = 1
+cameraSliderRow.Size = UDim2.new(1, 0, 0, 40)
+cameraSliderRow.Parent = page3
+local cameraSliderLayout = Instance.new("UIListLayout")
+cameraSliderLayout.FillDirection = Enum.FillDirection.Horizontal
+cameraSliderLayout.SortOrder = Enum.SortOrder.LayoutOrder
+cameraSliderLayout.Padding = UDim.new(0, 12)
+cameraSliderLayout.Parent = cameraSliderRow
+
+local zoomSlider = createSlider("Zoom", ZOOM_MIN, ZOOM_MAX, 2, 0.01, function(value)
+	zoomValue = value
+	targetDistance = zoomToDistance(value)
+	cameraAnimating = true
+end)
+zoomSlider.container.LayoutOrder = 1
+zoomSlider.container.Parent = cameraSliderRow
+
+local fovSlider = createSlider("Field of View", FOV_MIN, FOV_MAX, 0, 1, function(value)
+	fovValue = value
+	if viewCamera then
+		viewCamera.FieldOfView = value
+	end
+end)
+fovSlider.container.LayoutOrder = 2
+fovSlider.container.Parent = cameraSliderRow
+
+syncZoomSlider = function()
+	zoomValue = math.floor(distanceToZoom(targetDistance) / 0.01 + 0.5) * 0.01
+	zoomSlider.set(zoomValue, false)
+end
+
+local boxToggleRow = Instance.new("Frame")
+boxToggleRow.Name = "BoundingBoxToggle"
+boxToggleRow.LayoutOrder = 8
+boxToggleRow.BackgroundTransparency = 1
+boxToggleRow.Size = UDim2.new(1, 0, 0, 24)
+boxToggleRow.Parent = page3
+local boxToggleLayout = Instance.new("UIListLayout")
+boxToggleLayout.FillDirection = Enum.FillDirection.Horizontal
+boxToggleLayout.HorizontalAlignment = Enum.HorizontalAlignment.Left
+boxToggleLayout.VerticalAlignment = Enum.VerticalAlignment.Center
+boxToggleLayout.SortOrder = Enum.SortOrder.LayoutOrder
+boxToggleLayout.Padding = UDim.new(0, 8)
+boxToggleLayout.Parent = boxToggleRow
+
+local boxCheckbox = Instance.new("TextButton")
+boxCheckbox.LayoutOrder = 1
+boxCheckbox.Size = UDim2.fromOffset(20, 20)
+boxCheckbox.BackgroundColor3 = Color3.fromRGB(190, 50, 50)
+boxCheckbox.BorderSizePixel = 0
+boxCheckbox.AutoButtonColor = true
+boxCheckbox.Font = Enum.Font.GothamBold
+boxCheckbox.TextSize = 14
+boxCheckbox.TextColor3 = Color3.fromRGB(255, 255, 255)
+boxCheckbox.Text = ""
+boxCheckbox.Parent = boxToggleRow
+local boxCheckboxCorner = Instance.new("UICorner")
+boxCheckboxCorner.CornerRadius = UDim.new(0, 4)
+boxCheckboxCorner.Parent = boxCheckbox
+
+local boxCheckboxLabel = Instance.new("TextLabel")
+boxCheckboxLabel.LayoutOrder = 2
+boxCheckboxLabel.AutomaticSize = Enum.AutomaticSize.X
+boxCheckboxLabel.Size = UDim2.new(0, 0, 0, 20)
+boxCheckboxLabel.BackgroundTransparency = 1
+boxCheckboxLabel.Font = Enum.Font.Gotham
+boxCheckboxLabel.TextSize = 14
+boxCheckboxLabel.TextColor3 = Color3.fromRGB(220, 220, 220)
+boxCheckboxLabel.Text = "Show bounding box"
+boxCheckboxLabel.Parent = boxToggleRow
+
+local function refreshBoxCheckbox()
+	boxCheckbox.BackgroundColor3 = if showBoundingBox
+		then Color3.fromRGB(60, 180, 75)
+		else Color3.fromRGB(190, 50, 50)
+	boxCheckbox.Text = if showBoundingBox then "\u{2713}" else ""
+end
+refreshBoxCheckbox()
+
+track(boxCheckbox.MouseButton1Click:Connect(function()
+	showBoundingBox = not showBoundingBox
+	refreshBoxCheckbox()
+	refreshReviewState()
 end))
 
 local lastMousePos: Vector2? = nil
@@ -781,10 +1151,10 @@ track(typeScroller.InputChanged:Connect(function(input)
 	end
 end))
 
-local selectedTypeLabel = createLabel(page3, "Attachment: (none selected)", 5, true)
-selectedTypeLabel.TextColor3 = Color3.fromRGB(170, 220, 255)
+local accessoryTypeLabel = createLabel(page3, "Attachment: (none selected)", 5, false)
+accessoryTypeLabel.TextColor3 = Color3.fromRGB(170, 220, 255)
 
-createLabel(page3, "Body Proportions", 6, true)
+local bodyPropLabel = createLabel(page3, "Body Proportions", 6, true)
 
 local scaleScroller = Instance.new("ScrollingFrame")
 scaleScroller.LayoutOrder = 7
@@ -823,8 +1193,8 @@ track(scaleScroller.InputChanged:Connect(function(input)
 	end
 end))
 
-createDivider(page3, 8)
-local locationLabel = createLabel(page3, "", 9, false)
+createDivider(page3, 9)
+local locationLabel = createLabel(page3, "", 10, false)
 locationLabel.RichText = true
 locationLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
 locationLabel.TextXAlignment = Enum.TextXAlignment.Center
@@ -840,20 +1210,38 @@ end
 
 locationLabel.Text = formatPlacementText(0, 0, 0)
 
-local createButton3 = createButton(page3, "Create Accessory", 10, true)
-local backButton3 = createButton(page3, "Back", 11, false)
-local resultLabel = createLabel(page3, "", 12, false)
+local sizeWarningLabel = createLabel(page3, "", 11, false)
+sizeWarningLabel.RichText = true
+sizeWarningLabel.TextColor3 = Color3.fromRGB(235, 200, 120)
+sizeWarningLabel.TextXAlignment = Enum.TextXAlignment.Center
+
+local createButton3 = createButton(page3, "Create Accessory", 12, true)
+local backButton3 = createButton(page3, "Back", 13, false)
+local resultLabel = createLabel(page3, "", 14, false)
 resultLabel.TextColor3 = Color3.fromRGB(150, 230, 150)
 
-local cancelButton3 = createButton(page3, "Cancel", 13, false)
+local cancelButton3 = createButton(page3, "Cancel", 15, false)
 cancelButton3.BackgroundColor3 = Color3.fromRGB(120, 55, 55)
+
+local function updateTypeDependentVisibility()
+	local visible = state.accessoryType ~= nil
+	bodyPropLabel.Visible = visible
+	scaleScroller.Visible = visible
+	boxToggleRow.Visible = visible
+	locationLabel.Visible = visible
+	sizeWarningLabel.Visible = visible
+	createButton3.Visible = visible
+	resultLabel.Visible = visible
+end
+updateTypeDependentVisibility()
 
 local typeButtons: { TextButton } = {}
 
 local function refreshTypeButtons()
 	for index, button in ipairs(typeButtons) do
-		local option = ACCESSORY_TYPES[index]
-		local isSelected = selectedType ~= nil and selectedType.label == option.label
+		local option = ACCESSORY_TYPES[index] :: AccessoryTypeOption
+		local currentType = state.accessoryType
+		local isSelected = if currentType then currentType.label == option.label else false
 		button.BackgroundColor3 = if isSelected then COLOR_PRIMARY else Color3.fromRGB(55, 55, 55)
 	end
 end
@@ -867,6 +1255,7 @@ for index, option in ipairs(ACCESSORY_TYPES) do
 	button.Font = Enum.Font.Gotham
 	button.TextSize = 13
 	button.TextColor3 = Color3.fromRGB(235, 235, 235)
+	button.TextStrokeTransparency = 0.9
 	button.Text = option.label
 	button.Parent = typeScroller
 
@@ -875,10 +1264,12 @@ for index, option in ipairs(ACCESSORY_TYPES) do
 	corner.Parent = button
 
 	track(button.MouseButton1Click:Connect(function()
-		selectedType = option
-		selectedTypeLabel.Text = "Attachment: " .. option.attachment
+		state.accessoryType = option
+		accessoryTypeLabel.Text = "Attachment: " .. option.attachment
 		setButtonEnabled(createButton3, true, true)
+		updateTypeDependentVisibility()
 		refreshTypeButtons()
+		refreshReviewState()
 	end))
 
 	typeButtons[index] = button
@@ -888,8 +1279,8 @@ local scaleButtons: { TextButton } = {}
 
 local function refreshScaleButtons()
 	for index, button in ipairs(scaleButtons) do
-		local option = SCALE_TYPES[index]
-		local isSelected = selectedScaleType == option.value
+		local option = SCALE_TYPES[index] :: ScaleTypeOption
+		local isSelected = state.scaleType == option.value
 		button.BackgroundColor3 = if isSelected then COLOR_PRIMARY else Color3.fromRGB(55, 55, 55)
 	end
 end
@@ -900,6 +1291,7 @@ for index, option in ipairs(SCALE_TYPES) do
 	button.Size = UDim2.new(0, 84, 1, 0)
 	button.BackgroundColor3 = Color3.fromRGB(55, 55, 55)
 	button.BorderSizePixel = 0
+	button.TextStrokeTransparency = 0.9
 	button.Font = Enum.Font.Gotham
 	button.TextSize = 13
 	button.TextColor3 = Color3.fromRGB(235, 235, 235)
@@ -911,11 +1303,42 @@ for index, option in ipairs(SCALE_TYPES) do
 	corner.Parent = button
 
 	track(button.MouseButton1Click:Connect(function()
-		selectedScaleType = option.value
+		state.scaleType = option.value
 		refreshScaleButtons()
+		refreshReviewState()
 	end))
 
 	scaleButtons[index] = button
+end
+
+local function buildHandleFrom(mesh: BasePart, special: SpecialMesh?): MeshPart
+	if special then
+		local handle = InsertService:CreateMeshPartAsync(
+			special.MeshId,
+			Enum.CollisionFidelity.Default,
+			Enum.RenderFidelity.Automatic
+		)
+		handle.Size = handle.Size * special.Scale
+		handle.Color = mesh.Color
+		handle.Material = mesh.Material
+		handle.Transparency = mesh.Transparency
+		if special.TextureId ~= "" then
+			handle.TextureID = special.TextureId
+		end
+		local surface = mesh:FindFirstChildWhichIsA("SurfaceAppearance")
+		if surface then
+			surface:Clone().Parent = handle
+		end
+		return handle
+	end
+
+	local handle = (mesh :: MeshPart):Clone()
+	for _, child in ipairs(handle:GetChildren()) do
+		if not child:IsA("SurfaceAppearance") then
+			child:Destroy()
+		end
+	end
+	return handle
 end
 
 local function clearViewport()
@@ -927,23 +1350,8 @@ local function clearViewport()
 	viewCamera = nil
 end
 
-local function populateViewport()
-	clearViewport()
-	if not selectedMesh then
-		return
-	end
-
-	local clone = selectedMesh:Clone()
-	clone.Anchored = true
-	clone.CFrame = CFrame.new()
-	clone.Parent = viewport
-
-	local camera = Instance.new("Camera")
-	camera.Parent = viewport
-	viewport.CurrentCamera = camera
-	viewCamera = camera
-
-	local extent = math.max(clone.Size.X, clone.Size.Y, clone.Size.Z, 1)
+local function frameCamera(size: Vector3)
+	local extent = math.max(size.X, size.Y, size.Z, 1)
 	viewTargetSize = extent
 	viewYaw = math.rad(45)
 	viewPitch = math.rad(25)
@@ -952,11 +1360,73 @@ local function populateViewport()
 	targetPitch = viewPitch
 	targetDistance = viewDistance
 	updateViewportCamera()
-
-	resetHint()
 end
 
-local function detectRigScaleType(rig: Model): string?
+local function populateViewport()
+	clearViewport()
+	previewToken += 1
+	measuredHandleSize = nil
+	local mesh = state.mesh
+	if not mesh then
+		refreshReviewState()
+		return
+	end
+	local special = state.specialMesh
+
+	local camera = Instance.new("Camera")
+	camera.FieldOfView = fovValue
+	camera.Parent = viewport
+	viewport.CurrentCamera = camera
+	viewCamera = camera
+
+	local placeholder = mesh:Clone()
+	for _, child in ipairs(placeholder:GetChildren()) do
+		if not child:IsA("SurfaceAppearance") and not child:IsA("SpecialMesh") then
+			child:Destroy()
+		end
+	end
+	placeholder.Anchored = true
+	placeholder.CFrame = CFrame.new()
+	placeholder.Parent = viewport
+	frameCamera(placeholder.Size)
+	syncZoomSlider()
+	fovSlider.set(fovValue, false)
+	resetHint()
+
+	local myToken = previewToken
+	task.spawn(function()
+		local ok, built = pcall(buildHandleFrom, mesh, special)
+		if not ok or not built or myToken ~= previewToken then
+			if ok and typeof(built) == "Instance" then
+				(built :: Instance):Destroy()
+			end
+			refreshReviewState()
+			return
+		end
+		for _, child in ipairs(viewport:GetChildren()) do
+			if child:IsA("BasePart") then
+				child:Destroy()
+			end
+		end
+		built.Anchored = true
+		built.CFrame = CFrame.new()
+		built.Parent = viewport
+		measuredHandleSize = built.Size
+		if not orbiting then
+			frameCamera(built.Size)
+			syncZoomSlider()
+		end
+		refreshReviewState()
+	end)
+
+	refreshReviewState()
+end
+
+local function detectRigScaleType(rig: Model, detectedRigType: string?): string
+	if detectedRigType == "R6" then
+		return "Classic"
+	end
+
 	for _, descendant in ipairs(rig:GetDescendants()) do
 		if descendant:IsA("StringValue") and descendant.Name == "AvatarPartScaleType" then
 			local value = descendant.Value
@@ -965,66 +1435,21 @@ local function detectRigScaleType(rig: Model): string?
 			end
 		end
 	end
-	return nil
+	return "Classic"
 end
 
-local function buildSummary()
-	resultLabel.Text = ""
-	if selectedMesh then
-		local kind = if selectedSpecialMesh then "Part + SpecialMesh" else "MeshPart"
-		summaryMeshLabel.Text = selectedMesh.Name .. "  (" .. kind .. ")"
-	else
-		summaryMeshLabel.Text = "—"
-	end
-	summaryRigLabel.Text = if selectedRig
-		then selectedRig.Name .. "  (" .. tostring(rigType) .. ")"
-		else "—"
-	if selectedMesh then
-		local p = selectedMesh.Position
-		locationLabel.Text = formatPlacementText(p.X, p.Y, p.Z)
-	else
-		locationLabel.Text = formatPlacementText(0, 0, 0)
-	end
-	if selectedRig then
-		local detected = detectRigScaleType(selectedRig)
-		if detected then
-			selectedScaleType = detected
-		end
-	end
-	refreshScaleButtons()
-	setButtonEnabled(createButton3, selectedType ~= nil, true)
-	refreshTypeButtons()
-	populateViewport()
-end
+local MAX_PART_AXIS = 2048
 
-local function buildHandle(): MeshPart
-	if selectedSpecialMesh and selectedMesh then
-		local handle = InsertService:CreateMeshPartAsync(
-			selectedSpecialMesh.MeshId,
-			Enum.CollisionFidelity.Default,
-			Enum.RenderFidelity.Automatic
-		)
-		handle.Size = handle.Size * selectedSpecialMesh.Scale
-		handle.Color = selectedMesh.Color
-		handle.Material = selectedMesh.Material
-		handle.Transparency = selectedMesh.Transparency
-		if selectedSpecialMesh.TextureId ~= "" then
-			handle.TextureID = selectedSpecialMesh.TextureId
-		end
-		local surface = selectedMesh:FindFirstChildWhichIsA("SurfaceAppearance")
-		if surface then
-			surface:Clone().Parent = handle
-		end
-		return handle
+local function getProspectiveHandleSize(): Vector3?
+	local mesh = state.mesh
+	if not mesh then
+		return nil
 	end
-
-	local handle = (selectedMesh :: MeshPart):Clone()
-	for _, child in ipairs(handle:GetChildren()) do
-		if not child:IsA("SurfaceAppearance") then
-			child:Destroy()
-		end
+	local special = state.specialMesh
+	if special then
+		return mesh.Size * special.Scale
 	end
-	return handle
+	return mesh.Size
 end
 
 local function findRigAttachment(rig: Model, name: string): Attachment?
@@ -1036,6 +1461,163 @@ local function findRigAttachment(rig: Model, name: string): Attachment?
 	return nil
 end
 
+local function getSelectedBoundingBox(): Vector3?
+	local sel = state.accessoryType
+	if not sel then
+		return nil
+	end
+	local set = BOUNDING_BOXES[sel.specKey]
+	if not set then
+		return nil
+	end
+	if state.scaleType == "ProportionsNormal" then
+		return set.ProportionsNormal
+	elseif state.scaleType == "ProportionsSlender" then
+		return set.ProportionsSlender
+	end
+	return set.Classic
+end
+
+local function getAttachmentFitSize(): Vector3?
+	local mesh = state.mesh
+	local rig = state.rig
+	local sel = state.accessoryType
+	if not mesh or not rig or not sel then
+		return nil
+	end
+	local attachment = findRigAttachment(rig, sel.attachment)
+	if not attachment then
+		return nil
+	end
+	local handleSize = measuredHandleSize or getProspectiveHandleSize()
+	if not handleSize then
+		return nil
+	end
+
+	local relative = attachment.WorldCFrame:Inverse() * mesh.CFrame
+	local px, py, pz, m00, m01, m02, m10, m11, m12, m20, m21, m22 = relative:GetComponents()
+	local hx, hy, hz = handleSize.X / 2, handleSize.Y / 2, handleSize.Z / 2
+
+	local ex = math.abs(m00) * hx + math.abs(m01) * hy + math.abs(m02) * hz
+	local ey = math.abs(m10) * hx + math.abs(m11) * hy + math.abs(m12) * hz
+	local ez = math.abs(m20) * hx + math.abs(m21) * hy + math.abs(m22) * hz
+
+	return Vector3.new(
+		2 * (math.abs(px) + ex),
+		2 * (math.abs(py) + ey),
+		2 * (math.abs(pz) + ez)
+	)
+end
+
+local function updateWorkspaceBox()
+	removeWorkspaceBox()
+	if not showBoundingBox or state.step ~= 3 then
+		return
+	end
+	local box = getSelectedBoundingBox()
+	local rig = state.rig
+	local sel = state.accessoryType
+	if not box or not rig or not sel then
+		return
+	end
+	local attachment = findRigAttachment(rig, sel.attachment)
+	if not attachment then
+		return
+	end
+
+	local part = Instance.new("Part")
+	part.Name = "AccessoryBoundingBoxPreview"
+	part.Anchored = true
+	part.CanCollide = false
+	part.CanQuery = false
+	part.CanTouch = false
+	part.CastShadow = false
+	part.Locked = true
+	part.Archivable = false
+	part.Material = Enum.Material.SmoothPlastic
+	part.Color = Color3.fromRGB(255, 0, 0)
+	part.Transparency = 0.75
+	part.Size = box
+	part.CFrame = attachment.WorldCFrame
+	part.Parent = workspace
+	workspaceBoxPart = part
+end
+
+refreshReviewState = function()
+	updateWorkspaceBox()
+
+	local box = getSelectedBoundingBox()
+
+	local warnings: { string } = {}
+
+	local fitSize = getAttachmentFitSize()
+	if box and fitSize then
+		local epsilon = 1e-3
+		if fitSize.X > box.X + epsilon or fitSize.Y > box.Y + epsilon or fitSize.Z > box.Z + epsilon then
+			local label = if state.accessoryType then state.accessoryType.label else "?"
+			table.insert(
+				warnings,
+				string.format(
+					'<font color="rgb(255,90,90)">Outside bounds:</font> Mesh spans %.2f x %.2f x %.2f at the attachment, larger than the %s bounding box (%.2f x %.2f x %.2f).',
+					fitSize.X,
+					fitSize.Y,
+					fitSize.Z,
+					label,
+					box.X,
+					box.Y,
+					box.Z
+				)
+			)
+		end
+	end
+
+	local size = measuredHandleSize or getProspectiveHandleSize()
+	if size and (size.X > MAX_PART_AXIS or size.Y > MAX_PART_AXIS or size.Z > MAX_PART_AXIS) then
+		table.insert(
+			warnings,
+			string.format(
+				'<font color="rgb(255,170,0)">Warning:</font> Handle is too big for Roblox (~%.0f x %.0f x %.0f studs, max %d per axis).',
+				size.X,
+				size.Y,
+				size.Z,
+				MAX_PART_AXIS
+			)
+		)
+	end
+
+	sizeWarningLabel.Text = table.concat(warnings, "\n")
+end
+
+local function buildSummary()
+	resultLabel.Text = ""
+	showBoundingBox = false
+	refreshBoxCheckbox()
+	if state.mesh then
+		local kind = if state.specialMesh then "Part + SpecialMesh" else "MeshPart"
+		summaryMeshLabel.Text = state.mesh.Name .. "  (" .. kind .. ")"
+	else
+		summaryMeshLabel.Text = "—"
+	end
+
+	summaryRigLabel.Text = if state.rig
+		then state.rig.Name .. "  (" .. tostring(state.rigType) .. ")"
+		else "—"
+	if state.mesh then
+		local p = state.mesh.Position
+		locationLabel.Text = formatPlacementText(p.X, p.Y, p.Z)
+	else
+		locationLabel.Text = formatPlacementText(0, 0, 0)
+	end
+	if state.rig then
+		state.scaleType = detectRigScaleType(state.rig, state.rigType)
+	end
+	refreshScaleButtons()
+	setButtonEnabled(createButton3, state.accessoryType ~= nil, true)
+	updateTypeDependentVisibility()
+	refreshTypeButtons()
+	populateViewport()
+end
+
 local function createThumbnail(accessory: Accessory, sourceHandle: BasePart)
 	local config = Instance.new("Configuration")
 	config.Name = "ThumbnailConfiguration"
@@ -1045,24 +1627,40 @@ local function createThumbnail(accessory: Accessory, sourceHandle: BasePart)
 	cameraTarget.Value = sourceHandle
 	cameraTarget.Parent = config
 
+	local x, y, z, r00, r01, r02, r10, r11, r12, r20, r21, _r22 = currentViewCFrame:GetComponents()
 	local cameraValue = Instance.new("CFrameValue")
 	cameraValue.Name = "ThumbnailCameraValue"
-	cameraValue.Value = currentViewCFrame
+	cameraValue.Value = CFrame.new(x, y, z, r00, r01, r02, r10, r11, r12, r20, r21, zoomValue)
 	cameraValue.Parent = config
 
 	config.Parent = accessory
 end
 
+local function setAccessoryType(accessory: Accessory, enumName: string)
+	local accessoryTypes = Enum.AccessoryType :: { [string]: Enum.AccessoryType }
+	local accessoryType = accessoryTypes[enumName]
+	if accessoryType then
+		accessory.AccessoryType = accessoryType
+	end
+end
+
 local function createAccessory()
-	if not selectedMesh or not selectedType then
+	if not state.mesh or not state.accessoryType then
 		resultLabel.TextColor3 = Color3.fromRGB(230, 150, 150)
 		resultLabel.Text = "Pick a mesh and an accessory type first."
 		return
 	end
 
+	removeWorkspaceBox()
+
+	local mesh = state.mesh
+	local accessoryType = state.accessoryType
+	local rig = state.rig
+	local special = state.specialMesh
+
 	local recording = ChangeHistoryService:TryBeginRecording("Create Accessory")
 
-	local ok, handleOrError = pcall(buildHandle)
+	local ok, handleOrError = pcall(buildHandleFrom, mesh, special)
 	if not ok then
 		if recording then
 			ChangeHistoryService:FinishRecording(recording, Enum.FinishRecordingOperation.Cancel)
@@ -1075,7 +1673,7 @@ local function createAccessory()
 	local handle = handleOrError :: MeshPart
 	handle.Name = "Handle"
 	handle.Anchored = false
-	handle.CFrame = selectedMesh.CFrame
+	handle.CFrame = mesh.CFrame
 
 	local existingScaleType = handle:FindFirstChild("AvatarPartScaleType")
 	if existingScaleType then
@@ -1083,40 +1681,44 @@ local function createAccessory()
 	end
 	local scaleTypeValue = Instance.new("StringValue")
 	scaleTypeValue.Name = "AvatarPartScaleType"
-	scaleTypeValue.Value = selectedScaleType
+	scaleTypeValue.Value = state.scaleType
 	scaleTypeValue.Parent = handle
 
 	local rigAttachment: Attachment? = nil
-	if selectedRig then
-		rigAttachment = findRigAttachment(selectedRig, selectedType.attachment)
+	if rig then
+		rigAttachment = findRigAttachment(rig, accessoryType.attachment)
 	end
 
 	local attachment = Instance.new("Attachment")
-	attachment.Name = selectedType.attachment
+	attachment.Name = accessoryType.attachment
 	if rigAttachment then
-		attachment.CFrame = selectedMesh.CFrame:Inverse() * rigAttachment.WorldCFrame
+		attachment.CFrame = mesh.CFrame:Inverse() * rigAttachment.WorldCFrame
 	end
 	attachment.Parent = handle
 
 	local accessory = Instance.new("Accessory")
-	accessory.Name = selectedMesh.Name .. "_Accessory"
-	pcall(function()
-		accessory.AccessoryType = (Enum.AccessoryType :: any)[selectedType.enumName]
-	end)
+	accessory.Name = mesh.Name .. "_Accessory"
+	setAccessoryType(accessory, accessoryType.enumName)
 	handle.Parent = accessory
 
-	local placementFolder = workspace:FindFirstChild("ForbiddenAccessories") or Instance.new("Folder")
-	placementFolder.Name = "ForbiddenAccessories"
-	placementFolder.Parent = workspace
+	local placementFolder: Folder
+	local existingFolder = workspace:FindFirstChild("ForbiddenAccessories")
+	if existingFolder and existingFolder:IsA("Folder") then
+		placementFolder = existingFolder
+	else
+		placementFolder = Instance.new("Folder")
+		placementFolder.Name = "ForbiddenAccessories"
+		placementFolder.Parent = workspace
+	end
 
 	accessory.Parent = placementFolder
-	handle.CFrame = selectedMesh.CFrame
+	handle.CFrame = mesh.CFrame
 
 	createThumbnail(accessory, handle)
 
-	selectedMesh.Parent = nil
-	selectedMesh = nil
-	selectedSpecialMesh = nil
+	mesh.Parent = nil
+	state.mesh = nil
+	state.specialMesh = nil
 
 	setSelectionSuppressed({ accessory })
 
@@ -1126,50 +1728,640 @@ local function createAccessory()
 
 	local message: string
 	local color: Color3
-	if not selectedRig then
+	if not rig then
 		color = Color3.fromRGB(235, 200, 120)
-		message = "Created " .. accessory.Name .. " (no rig selected to orient against)."
+		message = "⚠️ Created " .. accessory.Name .. " (no rig selected to orient against)."
 	elseif not rigAttachment then
 		color = Color3.fromRGB(235, 200, 120)
-		message = "Created, but " .. (selectedRig :: Model).Name .. " has no " .. selectedType.attachment .. "."
+		message = "⚠️ Created, but " .. rig.Name .. " has no " .. accessoryType.attachment .. "."
 	else
 		color = Color3.fromRGB(150, 230, 150)
-		message = "Created "
+		message = "Success! Created "
 			.. accessory.Name
 			.. " on "
-			.. (selectedRig :: Model).Name
-			.. " (" .. tostring(rigType) .. ")."
+			.. rig.Name
+			.. " (" .. tostring(state.rigType) .. ")."
 	end
 
 	resultLabel.Text = ""
-	selectedType = nil
-	selectedRig = nil
-	rigType = nil
+	state.accessoryType = nil
+	state.rig = nil
+	state.rigType = nil
 	showStep(1)
 	showTransientStatus(message, color)
 end
 
-function showStep(step: number)
-	currentStep = step
-	page1.Parent.Visible = step == 1
-	page2.Parent.Visible = step == 2
-	page3.Parent.Visible = step == 3
+type CameraRig = {
+	root: Frame,
+	accessoryNameLabel: TextLabel,
+	detectedTypeLabel: TextLabel,
+	loadHandle: (BasePart) -> (),
+	applyStored: (CFrame?, number?) -> (),
+	getCFrame: () -> CFrame,
+	getZoom: () -> number,
+	getFov: () -> number,
+	clear: () -> (),
+}
+
+local function createCameraRig(): CameraRig
+	local VP = 150
+	local Z_MIN, Z_MAX = 0.05, 1
+	local F_MIN, F_MAX = 20, 100
+
+	local root = Instance.new("Frame")
+	root.Name = "CameraRig"
+	root.BackgroundTransparency = 1
+	root.AutomaticSize = Enum.AutomaticSize.Y
+	root.Size = UDim2.new(1, 0, 0, 0)
+	local rootLayout = Instance.new("UIListLayout")
+	rootLayout.SortOrder = Enum.SortOrder.LayoutOrder
+	rootLayout.Padding = UDim.new(0, 10)
+	rootLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+	rootLayout.Parent = root
+
+	local row = Instance.new("Frame")
+	row.LayoutOrder = 1
+	row.BackgroundTransparency = 1
+	row.Size = UDim2.new(1, 0, 0, VP)
+	row.Parent = root
+
+	local vp = Instance.new("ViewportFrame")
+	vp.Name = "Preview"
+	vp.Size = UDim2.fromOffset(VP, VP)
+	vp.Position = UDim2.new(0, 0, 0, 0)
+	vp.BackgroundColor3 = Color3.fromRGB(20, 20, 24)
+	vp.BorderSizePixel = 0
+	vp.Active = true
+	vp.Parent = row
+	local vpCorner = Instance.new("UICorner")
+	vpCorner.CornerRadius = UDim.new(0, 6)
+	vpCorner.Parent = vp
+	local vpStroke = Instance.new("UIStroke")
+	vpStroke.Color = Color3.fromRGB(120, 90, 170)
+	vpStroke.Thickness = 1
+	vpStroke.Parent = vp
+
+	local info = Instance.new("Frame")
+	info.BackgroundTransparency = 1
+	info.Position = UDim2.new(0, VP + 12, 0, 0)
+	info.Size = UDim2.new(1, -(VP + 12), 1, 0)
+	info.Parent = row
+	local infoLayout = Instance.new("UIListLayout")
+	infoLayout.SortOrder = Enum.SortOrder.LayoutOrder
+	infoLayout.Padding = UDim.new(0, 2)
+	infoLayout.Parent = info
+
+	local nameTitle = createLabel(info, "Accessory", 1, true)
+	nameTitle.TextXAlignment = Enum.TextXAlignment.Left
+	local nameLabel = createLabel(info, "—", 2, false)
+	nameLabel.TextXAlignment = Enum.TextXAlignment.Left
+	nameLabel.TextColor3 = Color3.fromRGB(150, 230, 150)
+	local typeTitle = createLabel(info, "Accessory Type", 3, true)
+	typeTitle.TextXAlignment = Enum.TextXAlignment.Left
+	local typeLabel = createLabel(info, "—", 4, false)
+	typeLabel.TextXAlignment = Enum.TextXAlignment.Left
+	local orientTitle = createLabel(info, "Camera Orientation", 5, true)
+	orientTitle.TextXAlignment = Enum.TextXAlignment.Left
+	local orientLabel = createLabel(info, "", 6, false)
+	orientLabel.TextXAlignment = Enum.TextXAlignment.Left
+	orientLabel.RichText = true
+
+	local yaw = math.rad(45)
+	local pitch = math.rad(25)
+	local dist = 10
+	local tYaw = yaw
+	local tPitch = pitch
+	local tDist = dist
+	local targetSize = 4
+	local cam: Camera? = nil
+	local curCF: CFrame = CFrame.lookAt(Vector3.new(6, 4, 6), Vector3.zero)
+	local orbiting = false
+	local animating = false
+	local zoomV = 0.5
+	local fovV = 70
+	local syncZoom: () -> () = function() end
+
+	local function z2d(z: number): number
+		local frac = math.clamp((z - Z_MIN) / (Z_MAX - Z_MIN), 0, 1)
+		local near = targetSize * 0.6
+		local far = targetSize * 12
+		return far - frac * (far - near)
+	end
+
+	local function d2z(d: number): number
+		local near = targetSize * 0.6
+		local far = targetSize * 12
+		local frac = math.clamp((far - d) / math.max(far - near, 1e-3), 0, 1)
+		return math.clamp(Z_MIN + frac * (Z_MAX - Z_MIN), Z_MIN, Z_MAX)
+	end
+
+	local function updateCam()
+		local cosPitch = math.cos(pitch)
+		local offset = Vector3.new(
+			math.sin(yaw) * cosPitch,
+			math.sin(pitch),
+			math.cos(yaw) * cosPitch
+		) * dist
+		local cf = CFrame.lookAt(offset, Vector3.zero)
+		curCF = cf
+		if cam then
+			cam.CFrame = cf
+		end
+		local rx, ry, rz = cf:ToOrientation()
+		orientLabel.Text = string.format(
+			'<font weight="medium" color="rgb(190,0,0)">X:</font> %.3f  <font weight="medium" color="rgb(0,190,0)">Y:</font> %.3f  <font weight="medium" color="rgb(0,0,190)">Z:</font> %.3f',
+			math.deg(rx),
+			math.deg(ry),
+			math.deg(rz)
+		)
+	end
+
+	track(RunService.RenderStepped:Connect(function(dt)
+		if not animating or not cam then
+			return
+		end
+		local dYaw = tYaw - yaw
+		local dPitch = tPitch - pitch
+		local dDist = tDist - dist
+		if math.abs(dYaw) < 1e-4 and math.abs(dPitch) < 1e-4 and math.abs(dDist) < 1e-3 then
+			yaw, pitch, dist = tYaw, tPitch, tDist
+			updateCam()
+			animating = false
+			return
+		end
+		local alpha = math.min(dt * 14, 1)
+		yaw += dYaw * alpha
+		pitch += dPitch * alpha
+		dist += dDist * alpha
+		updateCam()
+	end))
+
+	local hint = Instance.new("TextLabel")
+	hint.AnchorPoint = Vector2.new(0.5, 1)
+	hint.Position = UDim2.new(0.5, 0, 1, -8)
+	hint.Size = UDim2.new(1, -16, 0, 16)
+	hint.BackgroundTransparency = 1
+	hint.Font = Enum.Font.GothamMedium
+	hint.TextSize = 12
+	hint.TextColor3 = Color3.fromRGB(225, 225, 225)
+	hint.TextStrokeTransparency = 0.25
+	hint.Text = "Hold Right-Mouse and Drag"
+	hint.ZIndex = 3
+	hint.Parent = vp
+	local hintTween: Tween? = nil
+	local hintDismissed = false
+
+	local function resetHint()
+		hintDismissed = false
+		if hintTween then
+			hintTween:Cancel()
+			hintTween = nil
+		end
+		hint.TextTransparency = 0
+		hint.TextStrokeTransparency = 0.25
+	end
+
+	local function dismissHint()
+		if hintDismissed then
+			return
+		end
+		hintDismissed = true
+		if hintTween then
+			hintTween:Cancel()
+		end
+		hintTween = TweenService:Create(hint, TweenInfo.new(0.4), {
+			TextTransparency = 1,
+			TextStrokeTransparency = 1,
+		})
+		hintTween:Play()
+	end
+
+	local function makeBtn(symbol: string, offsetX: number): TextButton
+		local b = Instance.new("TextButton")
+		b.Size = UDim2.fromOffset(24, 24)
+		b.AnchorPoint = Vector2.new(1, 0)
+		b.Position = UDim2.new(1, offsetX, 0, 6)
+		b.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+		b.BackgroundTransparency = 0.35
+		b.AutoButtonColor = true
+		b.Font = Enum.Font.GothamBold
+		b.TextSize = 18
+		b.TextColor3 = Color3.fromRGB(255, 255, 255)
+		b.Text = symbol
+		b.ZIndex = 3
+		b.Parent = vp
+		local c = Instance.new("UICorner")
+		c.CornerRadius = UDim.new(0, 4)
+		c.Parent = b
+		return b
+	end
+
+	local zoomInButton = makeBtn("+", -6)
+	local zoomOutButton = makeBtn("\u{2212}", -34)
+
+	local function zoomBy(factor: number)
+		tDist = math.clamp(tDist * factor, targetSize * 0.6, targetSize * 12)
+		animating = true
+		syncZoom()
+	end
+
+	track(zoomInButton.MouseButton1Click:Connect(function()
+		zoomBy(0.85)
+	end))
+	track(zoomOutButton.MouseButton1Click:Connect(function()
+		zoomBy(1.15)
+	end))
+
+	local lastPos: Vector2? = nil
+	local function stopOrbit()
+		orbiting = false
+		lastPos = nil
+	end
+
+	track(vp.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton2 then
+			orbiting = true
+			lastPos = Vector2.new(input.Position.X, input.Position.Y)
+			dismissHint()
+		end
+	end))
+	track(vp.InputChanged:Connect(function(input)
+		if orbiting and input.UserInputType == Enum.UserInputType.MouseMovement then
+			local pos = Vector2.new(input.Position.X, input.Position.Y)
+			if lastPos then
+				local delta = pos - lastPos
+				tYaw -= delta.X * 0.01
+				tPitch = math.clamp(tPitch + delta.Y * 0.01, math.rad(-85), math.rad(85))
+				if input:IsModifierKeyDown(Enum.ModifierKey.Shift) then
+					local grid = 0.5
+					tYaw = math.rad(math.round(math.deg(tYaw) / grid) * grid)
+					tPitch = math.rad(math.round(math.deg(tPitch) / grid) * grid)
+				end
+				animating = true
+			end
+			lastPos = pos
+		end
+	end))
+	track(vp.InputEnded:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton2 then
+			stopOrbit()
+		end
+	end))
+	track(UserInputService.InputEnded:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton2 then
+			stopOrbit()
+		end
+	end))
+
+	local sliderRow = Instance.new("Frame")
+	sliderRow.Name = "CameraSliders"
+	sliderRow.LayoutOrder = 2
+	sliderRow.BackgroundTransparency = 1
+	sliderRow.Size = UDim2.new(1, 0, 0, 40)
+	sliderRow.Parent = root
+	local sliderLayout = Instance.new("UIListLayout")
+	sliderLayout.FillDirection = Enum.FillDirection.Horizontal
+	sliderLayout.SortOrder = Enum.SortOrder.LayoutOrder
+	sliderLayout.Padding = UDim.new(0, 12)
+	sliderLayout.Parent = sliderRow
+
+	local zoomSlider = createSlider("Zoom", Z_MIN, Z_MAX, 2, 0.01, function(value)
+		zoomV = value
+		tDist = z2d(value)
+		animating = true
+	end)
+	zoomSlider.container.LayoutOrder = 1
+	zoomSlider.container.Parent = sliderRow
+
+	local fovSlider = createSlider("Field of View", F_MIN, F_MAX, 0, 1, function(value)
+		fovV = value
+		if cam then
+			cam.FieldOfView = value
+		end
+	end)
+	fovSlider.container.LayoutOrder = 2
+	fovSlider.container.Parent = sliderRow
+
+	syncZoom = function()
+		zoomV = math.floor(d2z(tDist) / 0.01 + 0.5) * 0.01
+		zoomSlider.set(zoomV, false)
+	end
+
+	local function clear()
+		for _, child in ipairs(vp:GetChildren()) do
+			if child:IsA("BasePart") or child:IsA("Camera") or child:IsA("Model") then
+				child:Destroy()
+			end
+		end
+		cam = nil
+	end
+
+	local function loadHandle(handle: BasePart)
+		clear()
+		local camera = Instance.new("Camera")
+		camera.FieldOfView = fovV
+		camera.Parent = vp
+		vp.CurrentCamera = camera
+		cam = camera
+
+		local clone = handle:Clone()
+		for _, child in ipairs(clone:GetChildren()) do
+			if not child:IsA("SurfaceAppearance") and not child:IsA("SpecialMesh") then
+				child:Destroy()
+			end
+		end
+		clone.Anchored = true
+		clone.CFrame = CFrame.new()
+		clone.Parent = vp
+
+		local extent = math.max(clone.Size.X, clone.Size.Y, clone.Size.Z, 1)
+		targetSize = extent
+		yaw = math.rad(45)
+		pitch = math.rad(25)
+		dist = extent * 2.2
+		tYaw, tPitch, tDist = yaw, pitch, dist
+		updateCam()
+		syncZoom()
+		fovSlider.set(fovV, false)
+		resetHint()
+	end
+
+	local function applyStored(cf: CFrame?, fov: number?)
+		if cf then
+			local pos = cf.Position
+			local d = pos.Magnitude
+			if d > 1e-3 then
+				dist = d
+				pitch = math.asin(math.clamp(pos.Y / d, -1, 1))
+				yaw = math.atan2(pos.X, pos.Z)
+				tYaw, tPitch, tDist = yaw, pitch, dist
+			end
+		end
+		if fov then
+			fovV = math.clamp(fov, F_MIN, F_MAX)
+			if cam then
+				cam.FieldOfView = fovV
+			end
+			fovSlider.set(fovV, false)
+		end
+		updateCam()
+		syncZoom()
+	end
+
+	return {
+		root = root,
+		accessoryNameLabel = nameLabel,
+		detectedTypeLabel = typeLabel,
+		loadHandle = loadHandle,
+		applyStored = applyStored,
+		getCFrame = function()
+			return curCF
+		end,
+		getZoom = function()
+			return zoomV
+		end,
+		getFov = function()
+			return fovV
+		end,
+		clear = clear,
+	}
+end
+
+local page4, page4Frame = makePage()
+page4Frame.BackgroundColor3 = Color3.fromRGB(30, 26, 37)
+
+local editAccent = Instance.new("Frame")
+editAccent.Name = "Accent"
+editAccent.BackgroundColor3 = Color3.fromRGB(150, 110, 210)
+editAccent.BorderSizePixel = 0
+editAccent.Size = UDim2.new(1, 0, 0, 3)
+editAccent.Position = UDim2.new(0, 0, 0, 0)
+editAccent.ZIndex = 2
+editAccent.Parent = page4Frame
+
+local editHeading = createHeading(page4, "Thumbnail Configurator")
+editHeading.TextColor3 = Color3.fromRGB(205, 175, 255)
+
+local editInstruction = createLabel(page4, "Select an accessory in the Workspace to edit its thumbnail.", 1, false)
+editInstruction.TextXAlignment = Enum.TextXAlignment.Center
+
+local editorRig = createCameraRig()
+editorRig.root.LayoutOrder = 2
+editorRig.root.Parent = page4
+
+local editDivider = createDivider(page4, 3)
+
+local editUpdateButton = createButton(page4, "Update Accessory", 4, false)
+editUpdateButton.BackgroundColor3 = Color3.fromRGB(124, 86, 196)
+
+local editCancelButton = createButton(page4, "Cancel", 5, false)
+editCancelButton.BackgroundColor3 = Color3.fromRGB(120, 55, 55)
+
+local function setEditorBodyVisible(visible: boolean)
+	editorRig.root.Visible = visible
+	editDivider.Visible = visible
+	editUpdateButton.Visible = visible
+end
+
+local function getEditorAccessory(): (Accessory?, BasePart?)
+	local selected = Selection:Get()
+	if #selected ~= 1 then
+		return nil, nil
+	end
+	local obj = selected[1]
+	if not obj then
+		return nil, nil
+	end
+	local accessory: Accessory? = nil
+	if obj:IsA("Accessory") then
+		accessory = obj
+	else
+		accessory = obj:FindFirstAncestorWhichIsA("Accessory") :: Accessory?
+	end
+	if not accessory then
+		return nil, nil
+	end
+	local handleChild = accessory:FindFirstChild("Handle")
+	local handle: BasePart? = if handleChild and handleChild:IsA("BasePart")
+		then handleChild
+		else accessory:FindFirstChildWhichIsA("BasePart") :: BasePart?
+	return accessory, handle
+end
+
+local function loadEditorAccessory(accessory: Accessory, handle: BasePart)
+	state.accessory = accessory
+	editorRig.accessoryNameLabel.Text = accessory.Name
+
+	local accessoryType = accessory.AccessoryType
+	editorRig.detectedTypeLabel.Text = if accessoryType == Enum.AccessoryType.Unknown
+		then "Not set"
+		else accessoryType.Name
+
+	editorRig.loadHandle(handle)
+
+	local config = accessory:FindFirstChild("ThumbnailConfiguration")
+	if config then
+		local cameraValue = config:FindFirstChild("ThumbnailCameraValue")
+		local fovObject = config:FindFirstChild("ThumbnailCameraFieldOfView")
+		local cf: CFrame? = if cameraValue and cameraValue:IsA("CFrameValue") then cameraValue.Value else nil
+		local fov: number? = if fovObject and fovObject:IsA("NumberValue") then fovObject.Value else nil
+		editorRig.applyStored(cf, fov)
+	end
+
+	editInstruction.Visible = false
+	setEditorBodyVisible(true)
+	setButtonEnabled(editUpdateButton, true, false)
+	editUpdateButton.BackgroundColor3 = Color3.fromRGB(124, 86, 196)
+end
+
+local function loadEditorSelection()
+	local accessory, handle = getEditorAccessory()
+	if accessory and handle then
+		loadEditorAccessory(accessory, handle)
+	elseif accessory and not handle then
+		state.accessory = nil
+		editorRig.clear()
+		setEditorBodyVisible(false)
+		editInstruction.Visible = true
+		editInstruction.Text = "This accessory has no Handle part to preview."
+	else
+		state.accessory = nil
+		editorRig.clear()
+		setEditorBodyVisible(false)
+		editInstruction.Visible = true
+		editInstruction.Text = "Select an accessory in the Workspace to edit its thumbnail."
+	end
+end
+
+local function ensureChild(parent: Instance, name: string, className: string): Instance
+	local existing = parent:FindFirstChild(name)
+	if existing and existing.ClassName == className then
+		return existing
+	end
+	if existing then
+		existing:Destroy()
+	end
+	local inst = Instance.new(className)
+	inst.Name = name
+	inst.Parent = parent
+	return inst
+end
+
+local function updateAccessoryThumbnail()
+	local accessory = state.accessory
+	if not accessory then
+		return
+	end
+	local handleChild = accessory:FindFirstChild("Handle")
+	local handle: BasePart? = if handleChild and handleChild:IsA("BasePart")
+		then handleChild
+		else accessory:FindFirstChildWhichIsA("BasePart") :: BasePart?
+	if not handle then
+		return
+	end
+
+	local recording = ChangeHistoryService:TryBeginRecording("Update Accessory Thumbnail")
+
+	local cf = editorRig.getCFrame()
+	local x, y, z, r00, r01, r02, r10, r11, r12, r20, r21, _r22 = cf:GetComponents()
+
+	local config = ensureChild(accessory, "ThumbnailConfiguration", "Configuration")
+	;(ensureChild(config, "ThumbnailCameraTarget", "ObjectValue") :: ObjectValue).Value = handle
+	;(ensureChild(config, "ThumbnailCameraValue", "CFrameValue") :: CFrameValue).Value =
+		CFrame.new(x, y, z, r00, r01, r02, r10, r11, r12, r20, r21, editorRig.getZoom())
+
+	local staleFov = config:FindFirstChild("ThumbnailCameraFieldOfView")
+	if staleFov then
+		staleFov:Destroy()
+	end
+
+	if recording then
+		ChangeHistoryService:FinishRecording(recording, Enum.FinishRecordingOperation.Commit)
+	end
+
+	local updatedName = accessory.Name
+	state.accessory = nil
+	setSelectionSuppressed({})
+	loadEditorSelection()
+	showTransientStatus("Success! Updated thumbnail for " .. updatedName .. ".", Color3.fromRGB(150, 230, 150))
+end
+
+local function enterThumbnailEditor()
+	state.step = EDITOR_STEP
+	removeWorkspaceBox()
+	state.mesh = nil
+	state.specialMesh = nil
+	state.rig = nil
+	state.rigType = nil
+	state.accessoryType = nil
+	state.accessory = nil
+	page1Frame.Visible = false
+	page2Frame.Visible = false
+	page3Frame.Visible = false
+	page4Frame.Visible = true
+	thumbnailEditorButton.Image = ICON.thumbnailEditorBack
+	topbarIcon.Image = ICON.thumbnailEditor
+	setStatus(stepStatusText(), stepStatusColor())
+	loadEditorSelection()
+end
+
+track(editUpdateButton.MouseButton1Click:Connect(function()
+	if editUpdateButton.Active then
+		updateAccessoryThumbnail()
+	end
+end))
+
+track(editCancelButton.MouseButton1Click:Connect(function()
+	if state.accessory then
+		state.accessory = nil
+		setSelectionSuppressed({})
+		loadEditorSelection()
+	else
+		setSelectionSuppressed({})
+		showStep(1)
+	end
+end))
+
+track(thumbnailEditorButton.MouseButton1Click:Connect(function()
+	if state.step == EDITOR_STEP then
+		setSelectionSuppressed({})
+		showStep(1)
+	else
+		enterThumbnailEditor()
+	end
+end))
+
+showStep = function(step: number)
+	state.step = step
+	if step ~= 3 then
+		removeWorkspaceBox()
+	end
+	if state.accessory then
+		state.accessory = nil
+		editorRig.clear()
+	end
+	thumbnailEditorButton.Image = ICON.thumbnailEditor
+	topbarIcon.Image = ICON.open
+	page1Frame.Visible = step == 1
+	page2Frame.Visible = step == 2
+	page3Frame.Visible = step == 3
+	page4Frame.Visible = false
 
 	if step == 1 then
-		if selectedMesh then
-			Selection:Set({ selectedMesh })
+		if state.mesh then
+			Selection:Set({ state.mesh })
 		end
 		refreshMeshStep()
 	elseif step == 2 then
-		if selectedRig then
-			Selection:Set({ selectedRig })
+		if state.rig then
+			Selection:Set({ state.rig })
 		end
 		refreshRigStep()
 	else
 		buildSummary()
 	end
 
-	setStatus(stepStatusText())
+	setStatus(stepStatusText(), stepStatusColor())
 end
 
 track(nextButton1.MouseButton1Click:Connect(function()
@@ -1199,37 +2391,39 @@ track(createButton3.MouseButton1Click:Connect(function()
 end))
 
 track(cancelButton3.MouseButton1Click:Connect(function()
-	selectedMesh = nil
-	selectedSpecialMesh = nil
-	selectedRig = nil
-	rigType = nil
-	selectedType = nil
+	state.mesh = nil
+	state.specialMesh = nil
+	state.rig = nil
+	state.rigType = nil
+	state.accessoryType = nil
 	setSelectionSuppressed({})
 	showStep(1)
-	showTransientStatus("Accessory creation cancelled.", Color3.fromRGB(235, 200, 120))
+	showTransientStatus("⚠️ Accessory creation cancelled.", Color3.fromRGB(235, 200, 120))
 end))
 
 track(Selection.SelectionChanged:Connect(function()
 	if not widget.Enabled or suppressSelectionReset then
 		return
 	end
-	if currentStep == 1 then
+	if state.step == 1 then
 		refreshMeshStep()
-	elseif currentStep == 2 then
+	elseif state.step == 2 then
 		local _, _, valid = getRigSelection()
-		if not valid and selectedRig then
-			selectedRig = nil
-			rigType = nil
+		if not valid and state.rig then
+			state.rig = nil
+			state.rigType = nil
 			showStep(1)
 			return
 		end
 		refreshRigStep()
-	elseif currentStep == 3 then
-		if selectedRig and not isInSelection(selectedRig) then
-			selectedRig = nil
-			rigType = nil
+	elseif state.step == 3 then
+		if state.rig and not isInSelection(state.rig) then
+			state.rig = nil
+			state.rigType = nil
 			showStep(1)
 		end
+	elseif state.step == EDITOR_STEP then
+		loadEditorSelection()
 	end
 end))
 
@@ -1239,13 +2433,16 @@ end))
 
 track(widget:GetPropertyChangedSignal("Enabled"):Connect(function()
 	updatePluginButtonState(widget.Enabled)
+	removeWorkspaceBox()
+	state.mesh = nil
+	state.specialMesh = nil
+	state.rig = nil
+	state.rigType = nil
+	state.accessoryType = nil
+	state.accessory = nil
+	editorRig.clear()
+	Selection:Set({})
 	if widget.Enabled then
-		selectedMesh = nil
-		selectedSpecialMesh = nil
-		selectedRig = nil
-		rigType = nil
-		selectedType = nil
-		Selection:Set({})
 		showStep(1)
 		checkVersionOnce()
 	end
